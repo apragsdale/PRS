@@ -199,7 +199,7 @@ def clump_variants(ts, summary_stats, nhaps, r2_threshold, window_size):
     #ld_calc = msprime.LdCalculator(ts)
     
     # compute LD and prune in order of significance (popping index of SNPs)
-    for position in ordered_positions:
+    for position in tqdm(ordered_positions, total=len(ordered_positions):
         if position in usable_positions:
             r2_forward = ld_calc.get_r2_array(eur_pos_index[position], direction=msprime.FORWARD, max_distance=125e3)
             for i in np.where(r2_forward > r2_threshold)[0]:
@@ -269,11 +269,12 @@ def infer_prs(ts, nhaps, clumped_snps, summary_stats, usable_positions, h2,
     
     return(prs_infer)
     
-def write_summaries(out, prs_true, prs_infer, nhaps, cases, controls, h2, ncausal, environment):
+def write_summaries(out, prs_true, prs_infer, nhaps, cases, controls,
+                    h2, ncausal, environment):
     eprint('Writing output!' + current_time())
     scaled_prs = math.sqrt(h2) * prs_true
     scaled_env = math.sqrt(1 - h2) * environment
-    out_prs = gzip.open(out + '_nhaps_' + '_'.join(map(str, nhaps)) 
+    out_prs = gzip.open(out + '_nhaps_' + '_'.join(list(map(str, nhaps))) 
                         + '_h2_' + str(round(h2, 2)) + '_m_' + str(ncausal)  
                         + '.prs.gz', 'wb')
     out_prs.write(('\t'.join(['Ind', 'Pop', 'PRS_true', 'PRS_infer', 'Pheno',
@@ -285,16 +286,16 @@ def write_summaries(out, prs_true, prs_infer, nhaps, cases, controls, h2, ncausa
             pheno = 0
         else:
             pheno = 'NA'
-        if ind in range(nhaps[0]/2):
+        if ind in range(nhaps[0]//2):
             pop = 'AFR'
-        elif ind in range(nhaps[0]/2, nhaps[0]/2+nhaps[1]/2):
+        elif ind in range(nhaps[0]//2, nhaps[0]//2+nhaps[1]//2):
             pop = 'EUR'
         else:
             pop = 'EAS'
-        out_prs.write(('\t'.join(map(str, [ind+1, pop, prs_true[ind],
-                                           prs_infer[ind], pheno,
-                                           scaled_env[ind]]))
-                                           + '\n').encode())
+        out_prs.write(('\t'.join(list(map(str, [ind+1, pop, prs_true[ind],
+                                                prs_infer[ind], pheno,
+                                                scaled_env[ind]])))
+                                                + '\n').encode())
     out_prs.close()
 
 

@@ -63,7 +63,7 @@ def main(args):
         summary_stats, usable_positions, args.h2, args.ncausal,
         os.path.join(args.path, args.out))
     # 
-    write_summaries(os.path.join(args.path, args.out), 
+    effect_sizes.write_summaries(os.path.join(args.path, args.out), 
         prs_true, prs_infer, nhaps, cases_diploid, 
         controls_diploid, args.h2, args.ncausal, environment)
     
