@@ -2,6 +2,17 @@ import msprime
 import demography
 import tskit
 import networkx as nx
+import sys, os
+from datetime import datetime
+
+
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
+
+def current_time():
+    return(' [' + datetime.strftime(datetime.now(), '%Y-%m-%d %H:%M:%S') + ']')
+
 
 def ooa(params=None, Ne=7300):
     if params is None:
@@ -36,21 +47,28 @@ def ooa(params=None, Ne=7300):
 def get_tree_sequeneces(Ne=7300, pop_ids=['YRI','CEU','CHB'],
                         sample_sizes=[1000, 1000, 1000],
                         recombination_map=None,
+                        length=None, recombination_rate=None,
                         mutation_rate=2e-8,
                         model='hudson',
                         return_ts=True):
     dg = ooa(Ne=Ne)
-    assert recombination_map is not None, "need to give recombination map path"
+    #assert recombination_map is not None, "need to give recombination map path"
     
     if return_ts is False:
-        print("returning msprime inputs")
+        eprint("returning msprime inputs ", current_time())
         pop_config, mig_mat, demo_events = dg.msprime_inputs(Ne=Ne)
         samples = dg.msprime_samples(pop_ids, sample_sizes)
     else:
-        print("simulating tree sequence")
-        ts = dg.simulate_msprime(model=model, Ne=Ne, pop_ids=pop_ids,
-                                 sample_sizes=sample_sizes,
-                                 recombination_map=recombination_map)
+        eprint("simulating tree sequence ", current_time())
+        if recombination_map is not None:
+            ts = dg.simulate_msprime(model=model, Ne=Ne, pop_ids=pop_ids,
+                                     sample_sizes=sample_sizes,
+                                     recombination_map=recombination_map)
+        else:
+            ts = dg.simulate_msprime(model=model, Ne=Ne, pop_ids=pop_ids,
+                                     sample_sizes=sample_sizes,
+                                     recombination_rate=recombination_rate,
+                                     sequence_length=length)
         if mutation_rate is not None:
             ts = msprime.mutate(ts, mutation_rate)
         return ts
