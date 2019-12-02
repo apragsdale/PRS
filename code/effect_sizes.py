@@ -199,7 +199,7 @@ def clump_variants(ts, summary_stats, nhaps, r2_threshold, window_size):
     #ld_calc = msprime.LdCalculator(ts)
     
     # compute LD and prune in order of significance (popping index of SNPs)
-    for position in tqdm(ordered_positions, total=len(ordered_positions):
+    for position in tqdm(ordered_positions, total=len(ordered_positions)):
         if position in usable_positions:
             r2_forward = ld_calc.get_r2_array(eur_pos_index[position], direction=msprime.FORWARD, max_distance=125e3)
             for i in np.where(r2_forward > r2_threshold)[0]:
