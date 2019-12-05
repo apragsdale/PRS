@@ -18,10 +18,15 @@ def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 def main(args):
+    eprint('Starting simulations')
     mutation_rate = 2e-8
     chrom = args.chrom
-    map_path = home+'/Data/Human/maps_b37/genetic_map_HapMapII_GRCh37/'
-    recombination_map = map_path + f'genetic_map_GRCh37_chr{chrom}.txt'
+    try:
+        map_path = home+'/Data/Human/maps_b37/genetic_map_HapMapII_GRCh37/'
+        recombination_map = map_path + f'genetic_map_GRCh37_chr{chrom}.txt'
+    except IOError:
+        map_path = '/lb/project/gravel/data/GeneticMap_HapMapII/'
+        recombination_map = map_path + f'genetic_map_GRCh37_chr{chrom}.txt'
     
     nhaps = list(map(int, args.nhaps.split(',')))
     
@@ -67,7 +72,8 @@ def main(args):
         prs_true, prs_infer, nhaps, cases_diploid, 
         controls_diploid, args.h2, args.ncausal, environment)
     
-    #print summary_stats
+    eprint('Ending simulations')
+    eprint('\n')
 
 if __name__ == "__main__":
     ## set path to send simulation and intermidiates
