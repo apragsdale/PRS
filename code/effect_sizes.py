@@ -25,7 +25,7 @@ def current_time():
     return(' [' + datetime.strftime(datetime.now(), '%Y-%m-%d %H:%M:%S') + ']')
 
 
-def true_prs(ts, ncausal, h2, nhaps, out):
+def true_prs(ts, ncausal, h2, nhaps, out, alpha):
     """
     ncausal : int, number of true causal alleles
     h2 : float, snp heritability
@@ -47,7 +47,7 @@ def true_prs(ts, ncausal, h2, nhaps, out):
     # go through each population's trees
     out_sites = gzip.open(out + '_nhaps_' + '_'.join(map(str, nhaps)) + '_h2_'
                           + str(round(h2, 2)) + '_m_' + str(ncausal) + 
-                          '.sites.gz', 'wb+')
+                          '_alpha_' + str(alpha) + '.sites.gz', 'wb+')
     out_sites.write(('\t'.join(['Index', 'Pos', 'AFR_count', 'EUR_count', 
                                 'EAS_count', 'Total', 'beta'])
                      + '\n').encode())
@@ -56,12 +56,10 @@ def true_prs(ts, ncausal, h2, nhaps, out):
     
     # loop through each population, get position and allele frequencies for
     # each causal mutation
+    #### I think this is not needed...
     for pop_leaves in [ts.get_samples()[:nhaps[0]],
                        ts.get_samples()[nhaps[0]:nhaps[0]+nhaps[1]],
                        ts.get_samples()[nhaps[0]+nhaps[1]:]]:
-#                      [ts.get_samples(population_id=0),
-#                       ts.get_samples(population_id=1),
-#                       ts.get_samples(population_id=2)]:
         for tree in ts.trees(tracked_leaves=pop_leaves):
             for mutation in tree.mutations():
                 if mutation.index in causal_mut_index:
@@ -75,12 +73,21 @@ def true_prs(ts, ncausal, h2, nhaps, out):
         pop_count += 1
     
     # assign causal effects as a random normal with mean zero and variance
-    # h^2/M, where M is the number of causal mutations
+    # h^2/M, where M is the number of causal mutations (if alpha=-1)
+    # here, if we want to model allele frequency dependent effect sizes, variance
+    # is proportional to 1/(f(1-f))^(1+alpha) 
+    # alpha = -1 gives you the standard neutral model (GTCA)
+    # alpha = 0 gives you E[beta^2] \propto 1/f(1-f)
+    # we do away with the h2/M scaling, because heritability is enforced later
     causal_effects = {}
     for mutation_index in causal_mutations:
-        causal_effects[mutation_index] = np.random.normal(loc=0,scale=h2/ncausal)
-    
-    
+        # get maf globally (or by average maf across pops?)
+        f = np.sum(mut_info[mutation_index][1:]) / np.sum(nhaps)
+        f = np.min([f, 1-f]) # maf
+        causal_effects[mutation_index] = np.random.normal(loc=0,
+            scale=np.sqrt(1/(f*(1-f))**(1+alpha)) )
+        # square root, because np.random.normal takes the stdev, not variance as scale
+
     eprint('Writing all site info' + current_time())
     for mutation in sorted(causal_mutations):
         out_sites.write((str(mutation) + '\t' + 
@@ -103,10 +110,13 @@ def case_control(prs_true, h2, nhaps, prevalence, ncontrols):
     get controls from non-cases in same ancestry
     """
     eprint('Defining cases/controls' + current_time())
+    # draw random environmental effects
     env_effect = np.random.normal(loc=0,scale=1-h2, size=sum(nhaps)//2)
+    # standardize the prs and environmental effects to enforce given h^2
     prs_norm = (prs_true - np.mean(prs_true)) / np.std(prs_true)
     env_norm = (env_effect - np.mean(env_effect)) / np.std(env_effect)
     total_liability = math.sqrt(h2) * prs_norm + math.sqrt(1 - h2) * env_norm
+    # rank EUR liabilities to get the cases
     eur_liability = total_liability[nhaps[0]//2:(nhaps[0]+nhaps[1])//2]
     sorted_liability = sorted(eur_liability)
     cases = [i for (i, x) in enumerate(eur_liability) if x >= sorted_liability[int((1-prevalence)*len(sorted_liability))]]
@@ -119,6 +129,14 @@ def case_control(prs_true, h2, nhaps, prevalence, ncontrols):
     control_ids = [x+nhaps[0]//2 for x in sorted(controls)]
     
     return case_ids, control_ids, prs_norm, env_norm
+
+def or_p(c):
+    if c[0][1] == 0 or c[1][0] == 0:
+        OR = np.inf
+    else:
+        OR = c[0][0]*c[1][1]/c[0][1]/c[1][0]
+    p = stats.chisquare(c)
+    return OR, p.pvalue[0]
 
 def run_gwas(ts, diploid_cases, diploid_controls, p_threshold, cc_maf):
     """
@@ -157,7 +175,8 @@ def run_gwas(ts, diploid_cases, diploid_controls, p_threshold, cc_maf):
         if case_control_maf > cc_maf:
             contingency = [[case_control[position][0], num_cases - case_control[position][0]],
                 [case_control[position][1], num_controls - case_control[position][1]]]
-            (OR, p) = stats.fisher_exact(contingency) #OR, p-value
+            #(OR, p) = stats.fisher_exact(contingency) #OR, p-value
+            (OR, p) = or_p(contingency) # use chi2 approx and compute OR from table (much faster than fisher's exact test
             if not np.isnan(OR) and not np.isinf(OR) and OR != 0 and p <= p_threshold:
                 summary_stats[position] = [OR, p]
                 num_var += 1
@@ -220,7 +239,7 @@ def clump_variants(ts, summary_stats, nhaps, r2_threshold, window_size):
     
 
 def infer_prs(ts, nhaps, clumped_snps, summary_stats, usable_positions, h2,
-              ncausal, out):
+              ncausal, out, alpha):
     """
     use clumped variants from biased gwas to compute inferred prs for everyone
     """
@@ -236,7 +255,7 @@ def infer_prs(ts, nhaps, clumped_snps, summary_stats, usable_positions, h2,
     # go through each population's trees
     out_sites = gzip.open(out + '_nhaps_' + '_'.join(map(str, nhaps)) + '_h2_'
                           + str(round(h2, 2)) + '_m_' + str(ncausal) +
-                          '.infer_sites.gz', 'wb+')
+                          '_alpha_' + str(alpha) + '.infer_sites.gz', 'wb+')
     out_sites.write(('\t'.join(['Index', 'Pos', 'AFR_count', 'EUR_count',
                                 'EAS_count', 'Total', 'beta']) + '\n').encode())
     mut_info = {}
@@ -245,9 +264,6 @@ def infer_prs(ts, nhaps, clumped_snps, summary_stats, usable_positions, h2,
     for pop_leaves in [ts.get_samples()[:nhaps[0]],
                        ts.get_samples()[nhaps[0]:nhaps[0]+nhaps[1]],
                        ts.get_samples()[nhaps[0]+nhaps[1]:]]:
-#                      [ts.get_samples(population_id=0),
-#                       ts.get_samples(population_id=1),
-#                       ts.get_samples(population_id=2)]:
         for tree in ts.trees(tracked_leaves=pop_leaves):
             for mutation in tree.mutations():
                 if mutation.position in usable_positions:
@@ -270,13 +286,13 @@ def infer_prs(ts, nhaps, clumped_snps, summary_stats, usable_positions, h2,
     return(prs_infer)
     
 def write_summaries(out, prs_true, prs_infer, nhaps, cases, controls,
-                    h2, ncausal, environment):
+                    h2, ncausal, environment, alpha):
     eprint('Writing output!' + current_time())
     scaled_prs = math.sqrt(h2) * prs_true
     scaled_env = math.sqrt(1 - h2) * environment
     out_prs = gzip.open(out + '_nhaps_' + '_'.join(list(map(str, nhaps))) 
-                        + '_h2_' + str(round(h2, 2)) + '_m_' + str(ncausal)  
-                        + '.prs.gz', 'wb')
+                        + '_h2_' + str(round(h2, 2)) + '_m_' + str(ncausal) +
+                        '_alpha_' + str(alpha) + '.prs.gz', 'wb')
     out_prs.write(('\t'.join(['Ind', 'Pop', 'PRS_true', 'PRS_infer', 'Pheno',
                               'Environment']) + '\n').encode())
     for ind in range(len(prs_true)):

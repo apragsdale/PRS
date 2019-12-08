@@ -48,7 +48,7 @@ def main(args):
 
     # compute effect sizes for causal snps
     prs_true = effect_sizes.true_prs(ts, args.ncausal, args.h2, nhaps,
-        os.path.join(args.path, args.out))
+        os.path.join(args.path, args.out), args.alpha)
     # get list of cases and controls in european samples
     cases_diploid, controls_diploid, prs_norm, environment = effect_sizes.case_control(
         prs_true, args.h2, nhaps, args.prevalence, args.ncontrols)
@@ -61,11 +61,11 @@ def main(args):
     # 
     prs_infer = effect_sizes.infer_prs(ts, nhaps, clumped_snps,
         summary_stats, usable_positions, args.h2, args.ncausal,
-        os.path.join(args.path, args.out))
+        os.path.join(args.path, args.out), args.alpha)
     # 
     effect_sizes.write_summaries(os.path.join(args.path, args.out), 
         prs_true, prs_infer, nhaps, cases_diploid, 
-        controls_diploid, args.h2, args.ncausal, environment)
+        controls_diploid, args.h2, args.ncausal, environment, args.alpha)
     
     #print summary_stats
 
@@ -84,6 +84,7 @@ if __name__ == "__main__":
     parser.add_argument('--window_size', help='', type=int, default=250e3)
     parser.add_argument('--out', help='', default='sim0')
     parser.add_argument('--path', help='', default=home+'/Project/PRS/simulations/')
+    parser.add_argument('--alpha', help='', type=float, default='-1')
 
     args = parser.parse_args()
     main(args)
