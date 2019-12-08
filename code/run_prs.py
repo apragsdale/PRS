@@ -18,7 +18,7 @@ def eprint(*args, **kwargs):
     print(*args, file=sys.stderr, **kwargs)
 
 def main(args):
-    eprint('Starting simulations')
+    eprint(f'Starting simulations: h2={args.h2}, ncausal={args.ncausal}, alpha={args.alpha}')
     mutation_rate = 2e-8
     chrom = args.chrom
     try:

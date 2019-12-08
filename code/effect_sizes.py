@@ -75,9 +75,9 @@ def true_prs(ts, ncausal, h2, nhaps, out, alpha):
     # assign causal effects as a random normal with mean zero and variance
     # h^2/M, where M is the number of causal mutations (if alpha=-1)
     # here, if we want to model allele frequency dependent effect sizes, variance
-    # is proportional to 1/(f(1-f))^(1+alpha) 
-    # alpha = -1 gives you the standard neutral model (GTCA)
-    # alpha = 0 gives you E[beta^2] \propto 1/f(1-f)
+    # is proportional to (f(1-f))^alpha
+    # alpha = 0 gives you the standard neutral model (GTCA)
+    # alpha = -1 gives you E[beta^2] \propto 1/f(1-f)
     # we do away with the h2/M scaling, because heritability is enforced later
     causal_effects = {}
     for mutation_index in causal_mutations:
@@ -85,7 +85,7 @@ def true_prs(ts, ncausal, h2, nhaps, out, alpha):
         f = np.sum(mut_info[mutation_index][1:]) / np.sum(nhaps)
         f = np.min([f, 1-f]) # maf
         causal_effects[mutation_index] = np.random.normal(loc=0,
-            scale=np.sqrt(1/(f*(1-f))**(1+alpha)) )
+            scale=np.sqrt((f*(1-f))**alpha) )
         # square root, because np.random.normal takes the stdev, not variance as scale
 
     eprint('Writing all site info' + current_time())
