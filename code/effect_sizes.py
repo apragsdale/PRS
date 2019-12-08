@@ -173,10 +173,15 @@ def run_gwas(ts, diploid_cases, diploid_controls, p_threshold, cc_maf):
                           (num_controls - case_control[position][1])/num_controls)
         case_control_maf = min((case_control[position][0]+case_control[position][1])/(num_cases+num_controls), (num_cases + num_controls - case_control[position][0] - case_control[position][1])/(num_cases + num_controls))
         if case_control_maf > cc_maf:
-            contingency = [[case_control[position][0], num_cases - case_control[position][0]],
-                [case_control[position][1], num_controls - case_control[position][1]]]
-            #(OR, p) = stats.fisher_exact(contingency) #OR, p-value
-            (OR, p) = or_p(contingency) # use chi2 approx and compute OR from table (much faster than fisher's exact test
+            contingency = np.array([[case_control[position][0],
+                                     num_cases - case_control[position][0]],
+                                    [case_control[position][1],
+                                     num_controls - case_control[position][1]]])
+            if np.any(contingency < 5):
+                (OR, p) = stats.fisher_exact(contingency) #OR, p-value
+            else:
+                # use chi2 approx and compute OR from table
+                (OR, p) = or_p(contingency)
             if not np.isnan(OR) and not np.isinf(OR) and OR != 0 and p <= p_threshold:
                 summary_stats[position] = [OR, p]
                 num_var += 1
@@ -207,6 +212,7 @@ def clump_variants(ts, summary_stats, nhaps, r2_threshold, window_size):
     ordered_positions = sorted(summary_stats.keys(), key=lambda x: summary_stats[x][-1])
     #[(x, (x in usable_positions.keys())) for x in ordered_positions]
     
+    eprint('Getting Eur mutations and LD calculator' + current_time())
     eur_subset = ts.simplify(range(nhaps[0], (nhaps[0]+nhaps[1])))
     eur_index_pos = {}
     eur_pos_index = {}
@@ -217,6 +223,7 @@ def clump_variants(ts, summary_stats, nhaps, r2_threshold, window_size):
     ld_calc = msprime.LdCalculator(eur_subset)
     #ld_calc = msprime.LdCalculator(ts)
     
+    eprint('Computing LD and thinning' + current_time())
     # compute LD and prune in order of significance (popping index of SNPs)
     for position in tqdm(ordered_positions, total=len(ordered_positions)):
         if position in usable_positions:
