@@ -255,7 +255,7 @@ if __name__ == "__main__":
         F1 = F.marginalize([0])
         
         spectra = {'fwdpy':{'Afr':fs0_proj, 'Eur': fs1_proj},
-                   'moments':{'Afr':F0_proj, 'Eur': F1_proj}}
+                   'moments':{'Afr':F0, 'Eur': F1}}
 
         fname = f'../simulations/spectra_tennessen_ns_{args.nsam}_seed_{seeds[rep]}.bp'
         with open(fname, 'wb+') as fout:
