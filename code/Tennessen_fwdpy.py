@@ -10,7 +10,7 @@ import moments
 import argparse
 import pickle
 
-from scipy.sparse import coo_matrix
+from scipy.sparse import coo_matrix, csr_matrix
 
 assert fwdpy11.__version__ >= '0.6.0', "Require fwdpy11 v. 0.6.0 or higher"
 
@@ -170,32 +170,52 @@ def per_deme_sfs(pop):
     for i, j in zip(deme_sizes[0], deme_sizes[1]):
         deme_sfs[i] = np.zeros(2*j + 1)
 
-    jSFS = coo_matrix(size=[2*j+1 for j in deme_sizes])
     ti = fwdpy11.TreeIterator(pop.tables, samples, update_samples=True)
     nt = np.array(pop.tables.nodes, copy=False)
     nmuts = 0
-    nmuts_sites = []
+    #nmuts_sites = []
+    
+    row = []
+    col = []
+    data = []
     
     for tree in ti:
         for mut in tree.mutations():
-            nmuts_sites.append(pop.tables.sites[mut.site].position)
+            #nmuts_sites.append(pop.tables.sites[mut.site].position)
             sb = tree.samples_below(mut.node)
             dc = np.unique(nt['deme'][sb], return_counts=True)
             assert dc[1].sum() == len(sb), f"{dc[1].sum} {len(sb)}"
             nmuts += 1
             for deme, daf in zip(dc[0], dc[1]):
                 deme_sfs[deme][daf] += 1
-            jSFS[(dc[0], dc[1])] += 1
+            if 0 not in dc[0]:
+                deme_sfs[0][0] += 1
+            if 1 not in dc[0]:
+                deme_sfs[1][0] += 1
+            data.append(1)
+            if 0 in dc[0]:
+                row.append(dc[1][0])
+                if 1 in dc[0]:
+                    col.append(dc[1][1])
+                else:
+                    col.append(0)
+            else:
+                row.append(0)
+                col.append(dc[1][0])
     
-    assert nmuts == len(pop.tables.mutations)
+    jSFS_coo = coo_matrix((data, (row, col)),
+                          shape=(len(deme_sfs[0]), len(deme_sfs[1])))
+    jSFS = csr_matrix(jSFS_coo)
     
-    table_sites = []
-    for mut in pop.tables.mutations:
-        table_sites.append(pop.tables.sites[mut.site].position)
+    #assert nmuts == len(pop.tables.mutations)
     
-    assert len(pop.tables.mutations) == len(pop.tables.sites)
+    #table_sites = []
+    #for mut in pop.tables.mutations:
+    #    table_sites.append(pop.tables.sites[mut.site].position)
     
-    return moments.Spectrum(deme_sfs[0]), moments.Spectrum(deme_sfs[1]), coo_matrix
+    #assert len(pop.tables.mutations) == len(pop.tables.sites)
+    
+    return moments.Spectrum(deme_sfs[0]), moments.Spectrum(deme_sfs[1]), jSFS
 
 def project_sfs(sfs, n):
     fs = moments.Spectrum(sfs)
