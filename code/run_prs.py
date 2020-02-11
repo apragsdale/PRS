@@ -21,10 +21,10 @@ def main(args):
     eprint(f'Starting simulations: h2={args.h2}, ncausal={args.ncausal}, alpha={args.alpha}')
     mutation_rate = 2e-8
     chrom = args.chrom
-    try:
-        map_path = home+'/Data/Human/maps_b37/genetic_map_HapMapII_GRCh37/'
-        recombination_map = map_path + f'genetic_map_GRCh37_chr{chrom}.txt'
-    except IOError:
+    
+    map_path = home+'/Data/Human/maps_b37/genetic_map_HapMapII_GRCh37/'
+    recombination_map = map_path + f'genetic_map_GRCh37_chr{chrom}.txt'
+    if os.path.isfile(recombination_map) is False:
         map_path = '/lb/project/gravel/data/GeneticMap_HapMapII/'
         recombination_map = map_path + f'genetic_map_GRCh37_chr{chrom}.txt'
     
@@ -36,8 +36,10 @@ def main(args):
                              + '_'.join(args.nhaps.split(',')) 
                              + '.hdf5')
     try:
+        eprint("Trying to load simulated trees")
         ts = msprime.load(tree_path)
     except:
+        eprint("Trees not found, simulating")
         ts = simulate_ooa.get_tree_sequeneces(
                 recombination_map=recombination_map,
                 sample_sizes=nhaps,

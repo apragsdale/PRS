@@ -252,7 +252,9 @@ if __name__ == "__main__":
     set_demographic_parameters()
     
     for rep in range(args.nreps):
+        print(f"running rep {rep+1} of {args.nreps}")
         rng = fwdpy11.GSLrng(seeds[0])
+        
         # Initialize demes:
         # Deme 0: Ancestral and Afr, Deme 1: Eur
         pop = fwdpy11.DiploidPopulation([N_ref, 0], 1.0)
@@ -292,7 +294,7 @@ if __name__ == "__main__":
         spectra = {'fwdpy':{'Afr':fs0_proj, 'Eur': fs1_proj},
                    'moments':{'Afr':F0, 'Eur': F1}}
 
-        fname = f'../simulations/spectra_tennessen_ns_{args.nsam}_seed_{seeds[rep]}.bp'
+        fname = f'/lb/project/gravel/ragsdale_projects/PRS/simulations/spectra_tennessen_ns_{args.nsam}_length_{args.length}_seed_{seeds[rep]}.bp'
         with open(fname, 'wb+') as fout:
             pickle.dump(spectra, fout)
 
