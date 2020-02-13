@@ -177,11 +177,11 @@ def run_gwas(ts, diploid_cases, diploid_controls, p_threshold, cc_maf):
                                      num_cases - case_control[position][0]],
                                     [case_control[position][1],
                                      num_controls - case_control[position][1]]])
-            if np.any(contingency < 5):
-                (OR, p) = stats.fisher_exact(contingency) #OR, p-value
-            else:
-                # use chi2 approx and compute OR from table
-                (OR, p) = or_p(contingency)
+            #if np.any(contingency < 5):
+            (OR, p) = stats.fisher_exact(contingency) #OR, p-value
+            #else:
+            #    # use chi2 approx and compute OR from table
+            #    (OR, p) = or_p(contingency)
             if not np.isnan(OR) and not np.isinf(OR) and OR != 0 and p <= p_threshold:
                 summary_stats[position] = [OR, p]
                 num_var += 1
