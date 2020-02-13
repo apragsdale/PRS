@@ -25,7 +25,7 @@ import numpy as np
 import concurrent.futures
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-
+import time
 
 def make_parser():
     parser = argparse.ArgumentParser("IM.py",
@@ -36,7 +36,7 @@ def make_parser():
                         help="Time since population split,"
                         " in units of Nref generations")
     parser.add_argument('--seed', type=int, help="Random number seed")
-
+    parser.add_argument('--ncpus', type=int, help="number of cpus requested")
     optional = parser.add_argument_group("Optional")
     optional.add_argument('--Nref', type=int, default=1000,
                           help="Ancestral population size")
@@ -49,12 +49,16 @@ def make_parser():
     optional.add_argument('-H', type=float, default=1.0, help="Dominance")
     optional.add_argument('--nreps', type=int, default=1,
                           help="Number of forward simulation replicates")
-    optional.add_argument('--migrates', '-M', type=float,
-                          nargs=2, default=[0., 0.],
-                          help="Migration rates")
+    optional.add_argument('--m01', type=float,
+                          default=0.,
+                          help="Migration rate scaled by 2Nref from 1 to 0")
+    optional.add_argument('--m10', type=float,
+                          default=0.,
+                          help="Migration rate scaled by 2Nref from 0 to 1")
     optional.add_argument('--nsam', type=int, default=15,
                           help="Number of diploids to sample from each deme")
-
+    optional.add_argument('--theta', type=float, default=1,
+                          help="theta = 4*Ne*u*L, neutral mutation rate")
     return parser
 
 
@@ -139,20 +143,20 @@ def build_demography(args):
               fwdpy11.SetExponentialGrowth(Tsplit, 1, G1)]
 
     d = None
-    if all([i == 0 for i in args.migrates]) is True:
+    if all([i == 0 for i in [args.m01, args.m10]]) is True:
         d = fwdpy11.DiscreteDemography(mass_migrations=split,
                                        set_growth_rates=growth)
     else:
         m = np.zeros(4).reshape(2, 2)
         m[0, 0] = 1
         # Convert from 2Nm_{ij}
-        m01t = args.migrates[0]/(2.*args.Nref)
-        m10t = args.migrates[1]/(2.*args.Nref)
-        cm = [fwdpy11.SetMigrationRates(Tsplit, 0, [1.0-m10t, m10t]),
-              fwdpy11.SetMigrationRates(Tsplit, 1, [m01t, 1.0-m01t])]
+        m01t = args.m01/(2.*args.Nref)
+        m10t = args.m10/(2.*args.Nref)
+        cm = [fwdpy11.SetMigrationRates(Tsplit, 0, [1.0-m01t, m01t]),
+              fwdpy11.SetMigrationRates(Tsplit, 1, [m10t, 1.0-m10t])]
         d = fwdpy11.DiscreteDemography(mass_migrations=split,
                                        set_growth_rates=growth,
-                                       migmatrix=(m, True),
+                                       migmatrix=(m, False),
                                        set_migration_rates=cm)
 
     return d, int(Tsplit + gens_post_split), (int(N0t), int(N1t))
@@ -168,7 +172,7 @@ def build_parameters_dict(args):
     nregions = []
     sregions = []
     # Exactly one crossover per diploid per generation
-    recregions = [fwdpy11.BinomialInterval(0, 1, 1)]
+    recregions = [fwdpy11.PoissonInterval(0, 1, 4*args.Nref*1e-8*1e6)]
 
     rates = (0, 0, None)
     if args.gamma is not None:
@@ -259,11 +263,14 @@ def runsim(args, pdict, seed):
     pop = fwdpy11.DiploidPopulation(args.Nref, 1.0)
     rng = fwdpy11.GSLrng(seed)
     np.random.seed(seed)
-
+    print(f"running simulation with seed = {seed}")
     params = fwdpy11.ModelParams(**pdict)
-    fwdpy11.evolvets(rng, pop, params, 100)
+    time1 = time.time()
+    fwdpy11.evolvets(rng, pop, params, 10)
+    time2 = time.time()
+    print(f"simulation {seed} took {time2-time1} seconds")
     if args.gamma is None:
-        fwdpy11.infinite_sites(rng, pop, 1./float(4.*args.Nref))
+        fwdpy11.infinite_sites(rng, pop, args.theta/float(4.*args.Nref))
     sfs0, sfs1 = per_deme_sfs(pop)
     sfs0_rs, sfs1_rs = subsample_sfs(pop, args)
     return sfs0, sfs1, sfs0_rs, sfs1_rs
@@ -303,7 +310,7 @@ def plot_sfs(args, moments_fs, fwdpy11_fs, fwdpy11_sample_sfs):
     deme1.set_xlabel("Derived frequency")
     deme0.set_ylabel("E[# mutations]")
     plt.tight_layout()
-    plt.savefig("moments.png")
+    plt.savefig("/lb/project/gravel/ragsdale_projects/PRS/code/kevin/moments.png")
 
 
 if __name__ == "__main__":
@@ -311,7 +318,7 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
 
     moments_params = (args.split, args.N0, args.N1, args.tsplit,
-                      args.migrates[1], args.migrates[0])
+                      args.m01, args.m10)
     moments_nsam = (2*args.nsam, 2*args.nsam)
     mgamma = args.gamma
     if mgamma is None:
@@ -328,7 +335,7 @@ if __name__ == "__main__":
     sum_sfs1 = np.zeros(2*finalNs[1]+1)
     sum_samples_sfs0 = np.zeros(2*args.nsam-1)
     sum_samples_sfs1 = np.zeros(2*args.nsam-1)
-    with concurrent.futures.ProcessPoolExecutor() as e:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=args.ncpus) as e:
         futures = {e.submit(runsim, args, pdict, i) for i in seeds}
         for fut in concurrent.futures.as_completed(futures):
             sfs0, sfs1, sfs0_rs, sfs1_rs = fut.result()
