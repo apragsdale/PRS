@@ -45,9 +45,14 @@ def set_demographic_parameters():
     N_Eu0 = 1032
 
     global m_Af0_B
+    global m_B_Af0
     m_Af0_B = 0 # 15e-5
+    m_B_Af0 = 15e-5
+
     global m_Af1_Eu1
+    global m_Eu1_Af1
     m_Af1_Eu1 = 0 # 2.5e-5
+    m_Eu1_Af1 = 2.5e-5
 
     T_Af = np.rint(148000 / gen_time).astype(int)
     T_B = np.rint(51000 / gen_time).astype(int)
@@ -135,7 +140,7 @@ def get_ddemog():
     size_change.append(fwdpy11.SetDemeSize(when=gens_burn_in+T0, deme=1, new_size=N_B))
     # at the same time, set migration rate between deme 0 and 1 to m_A_B
     mig_rates.append(fwdpy11.SetMigrationRates(gens_burn_in+T0, 0, [1-m_Af0_B, m_Af0_B]))
-    mig_rates.append(fwdpy11.SetMigrationRates(gens_burn_in+T0, 1, [m_Af0_B, 1-m_Af0_B]))
+    mig_rates.append(fwdpy11.SetMigrationRates(gens_burn_in+T0, 1, [m_B_Af0, 1-m_B_Af0]))
 
     # T1: adjust size of Eu to Eu0 and set growth rate
     size_change.append(fwdpy11.SetDemeSize(when=gens_burn_in+T0+T1, deme=1, 
@@ -146,7 +151,7 @@ def get_ddemog():
     mig_rates.append(fwdpy11.SetMigrationRates(gens_burn_in+T0+T1, 0, 
                                                [1-m_Af1_Eu1, m_Af1_Eu1]))
     mig_rates.append(fwdpy11.SetMigrationRates(gens_burn_in+T0+T1, 1, 
-                                               [m_Af1_Eu1, 1-m_Af1_Eu1]))
+                                               [m_Eu1_Af1, 1-m_Eu1_Af1]))
 
     # T2: set growth rates to accelerated rates in both populations
     growth_rates.append(fwdpy11.SetExponentialGrowth(when=gens_burn_in+T0+T1+T2,
@@ -229,15 +234,15 @@ def tennessen_moments(ns):
     fs.integrate([N_Af0/N_ref], T0/2/N_ref)
     fs = moments.Manips.split_1D_to_2D(fs, 2*ns, 2*ns)
     fs.integrate([N_Af0/N_ref, N_B/N_ref], T1/2/N_ref, 
-                 m=[[0,2*N_ref*m_Af0_B],[2*N_ref*m_Af0_B,0]])
+                 m=[[0,2*N_ref*m_Af0_B],[2*N_ref*m_B_Af0,0]])
     nu_func = lambda t: [N_Af0/N_ref,
                          N_Eu0/N_ref * np.exp(np.log(N_Eu1/N_Eu0) * t / (T2/2/N_ref))]
     fs.integrate(nu_func, T2/2/N_ref, 
-                 m=[[0,2*N_ref*m_Af1_Eu1],[2*N_ref*m_Af1_Eu1,0]])
+                 m=[[0,2*N_ref*m_Af1_Eu1],[2*N_ref*m_Eu1_Af1,0]])
     nu_func = lambda t: [N_Af0/N_ref * np.exp(np.log(N_AfF/N_Af0) * t / (T3/2/N_ref)),
                          N_Eu1/N_ref * np.exp(np.log(N_EuF/N_Eu1) * t / (T3/2/N_ref))]
     fs.integrate(nu_func, T3/2/N_ref,
-                 m=[[0,2*N_ref*m_Af1_Eu1],[2*N_ref*m_Af1_Eu1,0]])
+                 m=[[0,2*N_ref*m_Af1_Eu1],[2*N_ref*m_Eu1_Af1,0]])
     return fs
 
 if __name__ == "__main__":
@@ -294,7 +299,7 @@ if __name__ == "__main__":
         spectra = {'fwdpy':{'Afr':fs0_proj, 'Eur': fs1_proj},
                    'moments':{'Afr':F0, 'Eur': F1}}
 
-        fname = f'/lb/project/gravel/ragsdale_projects/PRS/simulations/spectra_tennessen_ns_{args.nsam}_length_{args.length}_mig_0_seed_{seeds[rep]}.bp'
+        fname = f'/lb/project/gravel/ragsdale_projects/PRS/simulations/spectra_tennessen_ns_{args.nsam}_length_{args.length}_mig_Eu_off_seed_{seeds[rep]}.bp'
         with open(fname, 'wb+') as fout:
             pickle.dump(spectra, fout)
 
