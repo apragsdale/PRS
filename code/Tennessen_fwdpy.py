@@ -7,11 +7,12 @@ import numpy as np
 import time
 import sys
 import moments
-import argparse
 import pickle
+import argparse
 import os
 
-import demography, networkx as nx
+import demography
+import networkx as nx
 
 from scipy.sparse import coo_matrix, csr_matrix
 
@@ -67,10 +68,12 @@ def make_parser():
 
 
 # Functions to run simulation and track sizes and events (following tutorial):
-def setup_and_run_model(pop, ddemog, simlen, recorder=None, seed=13, R=0):
+def setup_and_run_model(pop, ddemog, simlen, simplification_time=0, recorder=None, seed=13, R=0):
     """
     simlen: total simulation time
     genome length is 1, and R is the total recombination distance across this length
+    simplification_time is set if we want to finish the last number of generations
+        with shorter simplification intervals
     """
     pdict = {'nregions': [],
             'sregions': [],
@@ -81,11 +84,17 @@ def setup_and_run_model(pop, ddemog, simlen, recorder=None, seed=13, R=0):
             'prune_selected': True,
             'gvalue': fwdpy11.Multiplicative(2.),
             'demography': ddemog,
-            'simlen': simlen
+            'simlen': simlen-simplification_time
            }
     params = fwdpy11.ModelParams(**pdict)
     rng = fwdpy11.GSLrng(seed)
     fwdpy11.evolvets(rng, pop, params, 100, recorder)
+    if simplification_time > 0:
+        # finish simulation with shorter simplification time
+        # do we need to reset rng?
+        pdict['simlen'] = simplification_time
+        params = fwdpy11.ModelParams(**pdict)
+        fwdpy11.evolvets(rng, pop, params, 10, recorder)
 
 class SizeTracker(object):
     def __init__(self):
@@ -228,6 +237,7 @@ def tennessen_moments(args):
                  m=[[0,2*args.Nref*args.mF],[2*args.Nref*args.mF,0]])
     return fs
 
+"""
 def tennessen_demography(args):
     G = nx.DiGraph()
     # convert to genetic units
@@ -255,6 +265,7 @@ def tennessen_demography(args):
     dg = demography.DemoGraph(G)
     fs = dg.SFS(pop_ids=['Afr','Eur'], sample_sizes=[2*args.nsam, 2*args.nsam])
     return fs
+"""
 
 if __name__ == "__main__":
     parser = make_parser()
@@ -272,6 +283,7 @@ if __name__ == "__main__":
         # Deme 0: Ancestral and Afr, Deme 1: Eur
         pop = fwdpy11.DiploidPopulation([args.Nref, 0], 1.0)
         ddemog, total_sim_length = build_discrete_demography(args)
+        freq_simplification_time = np.rint(args.T_accel/args.generation_time).astype(int)
 
         # set up total recombination rate for sim
         r = args.recombination_rate
@@ -281,12 +293,13 @@ if __name__ == "__main__":
         st = SizeTracker()
 
         time1 = time.time()
-        setup_and_run_model(pop, ddemog, total_sim_length, recorder=st, R=R, seed=seeds[rep])
+        setup_and_run_model(pop, ddemog, total_sim_length, # simplification_time=freq_simplification_time,
+                            R=R, seed=seeds[rep])
         time2 = time.time()
 
-        print(f"length of simulation: {L}")
+        #print(f"length of simulation: {L}")
         print(f"time to run simulation: {time2-time1}")
-        assert np.all(st.data[-1][2][1] == [args.NAfr,args.NEur]), "final sizes aren't right"
+        #assert np.all(st.data[-1][2][1] == [args.NAfr,args.NEur]), "final sizes aren't right"
 
         # add neutral mutations
         fwdpy11.infinite_sites(rng, pop, args.length * args.mutation_rate)
