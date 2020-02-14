@@ -26,6 +26,7 @@ import concurrent.futures
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import time
+import pickle
 
 def make_parser():
     parser = argparse.ArgumentParser("IM.py",
@@ -172,7 +173,7 @@ def build_parameters_dict(args):
     nregions = []
     sregions = []
     # Exactly one crossover per diploid per generation
-    recregions = [fwdpy11.PoissonInterval(0, 1, 4*args.Nref*1e-8*1e6)]
+    recregions = [fwdpy11.PoissonInterval(0, 1, 2e-8*1e6)]
 
     rates = (0, 0, None)
     if args.gamma is not None:
@@ -266,13 +267,16 @@ def runsim(args, pdict, seed):
     print(f"running simulation with seed = {seed}")
     params = fwdpy11.ModelParams(**pdict)
     time1 = time.time()
-    fwdpy11.evolvets(rng, pop, params, 10)
+    fwdpy11.evolvets(rng, pop, params, 100)
     time2 = time.time()
     print(f"simulation {seed} took {time2-time1} seconds")
     if args.gamma is None:
         fwdpy11.infinite_sites(rng, pop, args.theta/float(4.*args.Nref))
     sfs0, sfs1 = per_deme_sfs(pop)
     sfs0_rs, sfs1_rs = subsample_sfs(pop, args)
+    spectra = {'subsampled':{'d0':sfs0_rs, 'd1':sfs1_rs},
+              'projected':{'d0':project_sfs(sfs0, 2*args.nsam), 'd1':project_sfs(sfs1, 2*args.nsam)}}
+    pickle.dump(spectra, open(f"/lb/project/gravel/ragsdale_projects/PRS/code/kevin/spectra_{seed}.pb","wb+"))
     return sfs0, sfs1, sfs0_rs, sfs1_rs
 
 

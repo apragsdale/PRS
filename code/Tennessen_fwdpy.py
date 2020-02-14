@@ -11,6 +11,8 @@ import argparse
 import pickle
 import os
 
+import demography, networkx as nx
+
 from scipy.sparse import coo_matrix, csr_matrix
 
 assert fwdpy11.__version__ >= '0.6.0', "Require fwdpy11 v. 0.6.0 or higher"
@@ -110,7 +112,7 @@ def build_discrete_demography(args):
 
     M_init = np.zeros(4).reshape(2,2)
     M_init[0,0] = 1
-    mm = fwdpy11.MigrationMatrix(M_init, False)
+    mm = fwdpy11.MigrationMatrix(M_init)
 
     # burn in for 20*Ne generations
     gens_burn_in = 20*args.Nref
@@ -214,16 +216,44 @@ def tennessen_moments(args):
     fs.integrate([args.NAfr0/args.Nref], (args.T_Af-args.T_B)/args.generation_time/2/args.Nref)
     fs = moments.Manips.split_1D_to_2D(fs, sample_sizes[0], sample_sizes[1])
     fs.integrate([args.NAfr0/args.Nref, args.NB/args.Nref],
-                 (args.T_B-args.T_Eu_As)/args.generation_time/2/N_ref, 
+                 (args.T_B-args.T_Eu_As)/args.generation_time/2/args.Nref, 
                  m=[[0,2*args.Nref*args.mB],[2*args.Nref*args.mB,0]])
     nu_func = lambda t: [args.NAfr0/args.Nref,
-                         args.NEur0/args.Nref * np.exp(np.log(args.NEur1/args.NEur0) * t / ((args.T_accel-args.T_Eu_As)/args.generation_time/2/args.Nref))]
-    fs.integrate(nu_func, (args.T_accel-args.T_Eu_As)/args.generation_time/2/args.Nref, 
+                         args.NEur0/args.Nref * np.exp(np.log(args.NEur1/args.NEur0) * t / ((args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref))]
+    fs.integrate(nu_func, (args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref, 
                  m=[[0,2*args.Nref*args.mF],[2*args.Nref*args.mF,0]])
     nu_func = lambda t: [args.NAfr0/args.Nref * np.exp(np.log(args.NAfr/args.NAfr0) * t / (args.T_accel/args.generation_time/2/args.Nref)),
                          args.NEur1/args.Nref * np.exp(np.log(args.NEur/args.NEur1) * t / (args.T_accel/args.generation_time/2/args.Nref))]
-    fs.integrate(nu_func, args.T_accel/args.generation_time/2/N_ref,
+    fs.integrate(nu_func, args.T_accel/args.generation_time/2/args.Nref,
                  m=[[0,2*args.Nref*args.mF],[2*args.Nref*args.mF,0]])
+    return fs
+
+def tennessen_demography(args):
+    G = nx.DiGraph()
+    # convert to genetic units
+    T0 = (args.T_Af-args.T_B)/args.generation_time/2/args.Nref
+    T1 = (args.T_B-args.T_Eu_As)/args.generation_time/2/args.Nref
+    T2 = (args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref
+    T3 = (args.T_accel)/args.generation_time/2/args.Nref
+    MB = 2*args.Nref*args.mB
+    MF = 2*args.Nref*args.mF
+    nuA = args.NAfr0/args.Nref
+    nuB = args.NB/args.Nref
+    nuAfr = args.NAfr/args.Nref
+    nuEur = args.NEur/args.Nref
+    nuEur0 = args.NEur0/args.Nref
+    nuEur1 = args.NEur1/args.Nref
+    # add edges and nodes
+    G.add_node('root', nu=1, T=0)
+    G.add_node('A', nu=nuA, T=T0)
+    G.add_node('B', nu=nuB, T=T1, m={'Afr0': MB})
+    G.add_node('Afr0', nu=nuA, T=T1+T2, m={'B': MB, 'Eur1': MF})
+    G.add_node('Eur1', nu0=nuEur0, nuF=nuEur1, T=T2, m={'Afr0': MF})
+    G.add_node('Eur', nu0=nuEur1, nuF=nuEur, T=T3, m={'Afr': MF})
+    G.add_node('Afr', nu0=nuA, nuF=nuAfr, T=T3, m={'Eur': MF})
+    G.add_edges_from([('root','A'), ('A','B'), ('A','Afr0'), ('Afr0','Afr'), ('B','Eur1'), ('Eur1','Eur')])
+    dg = demography.DemoGraph(G)
+    fs = dg.SFS(pop_ids=['Afr','Eur'], sample_sizes=[2*args.nsam, 2*args.nsam])
     return fs
 
 if __name__ == "__main__":
