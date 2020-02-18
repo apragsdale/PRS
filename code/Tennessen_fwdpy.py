@@ -2,27 +2,43 @@
 This uses fwdpy11 >= 0.6.0
 """
 
-import fwdpy11
-import numpy as np
-import time
-import sys
-import moments
-import pickle
-import argparse
 import os
+os.environ["MKL_NUM_THREADS"] = "1"  # NOQA
+os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NOQA
+os.environ["OMP_NUM_THREADS"] = "1"  # NOQA
+
+from scipy.sparse import coo_matrix, csr_matrix
+from datetime import datetime
+import argparse
+import pickle
+import moments
+import sys
+import time
+import numpy as np
+import fwdpy11
+
 
 # import demography
 # import networkx as nx
 
-from scipy.sparse import coo_matrix, csr_matrix
 
 assert fwdpy11.__version__ >= '0.6.0', "Require fwdpy11 v. 0.6.0 or higher"
+
+
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+    sys.stderr.flush()
+
+
+def current_time():
+    return(' [' + datetime.strftime(datetime.now(), '%Y-%m-%d %H:%M:%S') + ']')
 
 
 def make_parser():
     parser = argparse.ArgumentParser("IM.py",
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument('--seed', type=int, help="Random number seed")
+    parser.add_argument('--seed', type=int,
+                        help="Random number seed", required=True)
 
     optional = parser.add_argument_group("Optional")
     # demographic parameters, all given in physical units
@@ -40,10 +56,14 @@ def make_parser():
                           help="Eurasian size just as rapid growth starts")
     optional.add_argument('--NEur', type=int, default=512000,
                           help="Final size of Eur population")
-    optional.add_argument('--T_Af', type=int, default=148000)
-    optional.add_argument('--T_B', type=int, default=51000)
-    optional.add_argument('--T_Eu_As', type=int, default=23000)
-    optional.add_argument('--T_accel', type=int, default=5115)
+    optional.add_argument('--T_Af', type=int, default=148000,
+                          help="Years in past that ancestral population grew")
+    optional.add_argument('--T_B', type=int, default=51000,
+                          help="Years in past that Eurasian population split")
+    optional.add_argument('--T_Eu_As', type=int, default=23000,
+                          help="Years in past that Eu and As populations split")
+    optional.add_argument('--T_accel', type=int, default=5115,
+                          help="Years in past that accelerated growth began")
     optional.add_argument('--mB', type=float,
                           default=15e-5,
                           help="Migration rate during Eurasian bottleneck")
@@ -53,12 +73,17 @@ def make_parser():
     optional.add_argument('--generation_time', '-g', default=25, type=int)
 
     # genome options
-    optional.add_argument('--selection_coeff', default=0.0,
+    optional.add_argument('--selection_coeff', '-s',
                           type=float, help="s from 2Ns")
     # Require 0 <= h <= 2
-    optional.add_argument('-H', type=float, default=1.0, help="Dominance")
-    optional.add_argument('--mutation_rate', '-u', default=1.25e-8, type=float)
-    optional.add_argument('--length', '-L', default=100000, type=float)
+    optional.add_argument('-H', type=float, default=1.0,
+                          help="Dominance (h=1 is genic selection)")
+    optional.add_argument('--mutation_rate', '-u', default=1.25e-8, type=float,
+                          help="Per base neutral mutation rate")
+    optional.add_argument('--sel_rate', default=1e-9, type=float,
+                          help="Per base selected mutation rate")
+    optional.add_argument('--length', '-L', default=100000, type=float,
+                          help="Total length of simulation genome in bp")
     optional.add_argument('--recombination_rate', '-r',
                           default=2e-8, type=float)
 
@@ -67,6 +92,8 @@ def make_parser():
                           help="Number of forward simulation replicates")
     optional.add_argument('--nsam', type=int, default=15,
                           help="Number of diploids to sample from each deme")
+    optional.add_argument('--T_simp', type=int, default=5115,
+                          help="Time in past we switch simplification interval")
     return parser
 
 
@@ -79,12 +106,21 @@ def setup_and_run_model(pop, ddemog, simlen, simplification_time=0,
     simplification_time is set if we want to finish the last number of generations
         with shorter simplification intervals
     """
-    pdict = {'nregions': [],
-             'sregions': [],
+    nregions = []
+    sregions = []
+
+    rates = (0, 0, None)
+    if args.selection_coeff is not None:
+        sregions = [fwdpy11.ConstantS(0, 1, 1, args.selection_coeff, args.H)]
+        rates = (0, args.length*args.sel_rate, None)
+    recregions = [fwdpy11.PoissonInterval(0, 1, R)]
+
+    pdict = {'nregions': nregions,
+             'sregions': sregions,
              # set the recombintion rate to R, where R = rho/4N = r*L
-             'recregions': [fwdpy11.PoissonInterval(0, 1, R)],
+             'recregions': recregions,
              # set mutation rates to zero
-             'rates': (0, 0, None),
+             'rates': rates,
              'prune_selected': True,
              'gvalue': fwdpy11.Multiplicative(2.),
              'demography': ddemog,
@@ -95,7 +131,6 @@ def setup_and_run_model(pop, ddemog, simlen, simplification_time=0,
     fwdpy11.evolvets(rng, pop, params, 100, recorder)
     if simplification_time > 0:
         md = np.array(pop.diploid_metadata, copy=False)
-        print(np.unique(md['deme'], return_counts=True))
         # finish simulation with shorter simplification time
         # do we need to reset rng?
         pdict['simlen'] = simplification_time
@@ -191,15 +226,19 @@ def per_deme_sfs(pop):
     deme_sfs = {}
     for i, j in zip(deme_sizes[0], deme_sizes[1]):
         deme_sfs[i] = np.zeros(2*j + 1)
+    deme_sfs_sel = {}
+    for i, j in zip(deme_sizes[0], deme_sizes[1]):
+        deme_sfs_sel[i] = np.zeros(2*j + 1)
 
     ti = fwdpy11.TreeIterator(pop.tables, samples, update_samples=True)
     nt = np.array(pop.tables.nodes, copy=False)
-    nmuts = 0
-    # nmuts_sites = []
 
-    row = []
-    col = []
-    data = []
+    row_neu = []
+    col_neu = []
+    data_neu = []
+    row_sel = []
+    col_sel = []
+    data_sel = []
 
     for tree in ti:
         for mut in tree.mutations():
@@ -207,29 +246,50 @@ def per_deme_sfs(pop):
             sb = tree.samples_below(mut.node)
             dc = np.unique(nt['deme'][sb], return_counts=True)
             assert dc[1].sum() == len(sb), f"{dc[1].sum} {len(sb)}"
-            nmuts += 1
-            for deme, daf in zip(dc[0], dc[1]):
-                deme_sfs[deme][daf] += 1
-            if 0 not in dc[0]:
-                deme_sfs[0][0] += 1
-            if 1 not in dc[0]:
-                deme_sfs[1][0] += 1
-            data.append(1)
-            if 0 in dc[0]:
-                row.append(dc[1][0])
-                if 1 in dc[0]:
-                    col.append(dc[1][1])
+            if mut.neutral:  # mutation is neutral
+                for deme, daf in zip(dc[0], dc[1]):
+                    deme_sfs[deme][daf] += 1
+                if 0 not in dc[0]:
+                    deme_sfs[0][0] += 1
+                if 1 not in dc[0]:
+                    deme_sfs[1][0] += 1
+                data_neu.append(1)
+                if 0 in dc[0]:
+                    row_neu.append(dc[1][0])
+                    if 1 in dc[0]:
+                        col_neu.append(dc[1][1])
+                    else:
+                        col_neu.append(0)
                 else:
-                    col.append(0)
-            else:
-                row.append(0)
-                col.append(dc[1][0])
+                    row_neu.append(0)
+                    col_neu.append(dc[1][0])
+            elif not mut.neutral:  # mutation is selected:
+                for deme, daf in zip(dc[0], dc[1]):
+                    deme_sfs_sel[deme][daf] += 1
+                if 0 not in dc[0]:
+                    deme_sfs_sel[0][0] += 1
+                if 1 not in dc[0]:
+                    deme_sfs_sel[1][0] += 1
+                data_sel.append(1)
+                if 0 in dc[0]:
+                    row_sel.append(dc[1][0])
+                    if 1 in dc[0]:
+                        col_sel.append(dc[1][1])
+                    else:
+                        col_sel.append(0)
+                else:
+                    row_sel.append(0)
+                    col_sel.append(dc[1][0])
 
-    jSFS_coo = coo_matrix((data, (row, col)),
-                          shape=(len(deme_sfs[0]), len(deme_sfs[1])))
-    jSFS = csr_matrix(jSFS_coo)
+    jSFS_coo_neu = coo_matrix((data_neu, (row_neu, col_neu)),
+                              shape=(len(deme_sfs[0]), len(deme_sfs[1])))
+    jSFS_neu = csr_matrix(jSFS_coo_neu)
+    jSFS_coo_sel = coo_matrix((data_sel, (row_sel, col_sel)),
+                              shape=(len(deme_sfs[0]), len(deme_sfs[1])))
+    jSFS_sel = csr_matrix(jSFS_coo_sel)
 
-    return moments.Spectrum(deme_sfs[0]), moments.Spectrum(deme_sfs[1]), jSFS
+    return (moments.Spectrum(deme_sfs[0]), moments.Spectrum(deme_sfs[1]), jSFS_neu,
+            moments.Spectrum(deme_sfs_sel[0]), moments.Spectrum(deme_sfs_sel[1]), jSFS_sel)
 
 
 def project_sfs(sfs, n):
@@ -238,24 +298,31 @@ def project_sfs(sfs, n):
     return psfs.data[1:-1]
 
 
-def tennessen_moments(args):
+def tennessen_moments(args, gamma=None, h=1./2):
     # ns = diploid size
     sample_sizes = (2*args.nsam, 2*args.nsam)
-    fs = moments.Demographics1D.snm([sum(sample_sizes)])
+    if gamma is None:
+        gamma = 0
+    fs = moments.LinearSystem_1D.steady_state_1D(
+        sum(sample_sizes), gamma=gamma, h=h)
+    fs = moments.Spectrum(fs)
     fs.integrate([args.NAfr0/args.Nref], (args.T_Af-args.T_B) /
-                 args.generation_time/2/args.Nref)
+                 args.generation_time/2/args.Nref, gamma=gamma, h=h)
     fs = moments.Manips.split_1D_to_2D(fs, sample_sizes[0], sample_sizes[1])
     fs.integrate([args.NAfr0/args.Nref, args.NB/args.Nref],
                  (args.T_B-args.T_Eu_As)/args.generation_time/2/args.Nref,
-                 m=[[0, 2*args.Nref*args.mB], [2*args.Nref*args.mB, 0]])
+                 m=[[0, 2*args.Nref*args.mB], [2*args.Nref*args.mB, 0]],
+                 gamma=[gamma, gamma], h=[h, h])
     def nu_func(t): return [args.NAfr0/args.Nref,
                             args.NEur0/args.Nref * np.exp(np.log(args.NEur1/args.NEur0) * t / ((args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref))]
     fs.integrate(nu_func, (args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref,
-                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]])
+                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]],
+                 gamma=[gamma, gamma], h=[h, h])
     def nu_func(t): return [args.NAfr0/args.Nref * np.exp(np.log(args.NAfr/args.NAfr0) * t / (args.T_accel/args.generation_time/2/args.Nref)),
                             args.NEur1/args.Nref * np.exp(np.log(args.NEur/args.NEur1) * t / (args.T_accel/args.generation_time/2/args.Nref))]
     fs.integrate(nu_func, args.T_accel/args.generation_time/2/args.Nref,
-                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]])
+                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]],
+                 gamma=[gamma, gamma], h=[h, h])
     return fs
 
 
@@ -296,15 +363,15 @@ if __name__ == "__main__":
     seeds = np.random.randint(0, np.iinfo(np.uint32).max, args.nreps)
 
     for rep in range(args.nreps):
-        print(f"running rep {rep+1} of {args.nreps}")
+        eprint(f"running rep {rep+1} of {args.nreps}")
         rng = fwdpy11.GSLrng(seeds[rep])
-
+        eprint(current_time())
         # Initialize demes:
         # Deme 0: Ancestral and Afr, Deme 1: Eur
         pop = fwdpy11.DiploidPopulation([args.Nref, 0], 1.0)
         ddemog, total_sim_length = build_discrete_demography(args)
         freq_simplification_time = np.rint(
-            args.T_accel/args.generation_time).astype(int)
+            args.T_simp/args.generation_time).astype(int)
 
         # set up total recombination rate for sim
         r = args.recombination_rate
@@ -312,28 +379,37 @@ if __name__ == "__main__":
         R = r*L
 
         st = SizeTracker()
-
+        eprint(f"seed = {seeds[rep]}")
         time1 = time.time()
-        print(freq_simplification_time, total_sim_length)
+        eprint("simplification time and total time:",
+               freq_simplification_time, total_sim_length)
         setup_and_run_model(pop, ddemog, total_sim_length, simplification_time=freq_simplification_time,
                             R=R, seed=seeds[rep])
         time2 = time.time()
-
+        eprint(current_time())
         # print(f"length of simulation: {L}")
-        print(f"time to run simulation: {time2-time1}")
+        eprint(f"time to run simulation: {time2-time1}")
         md = np.array(pop.diploid_metadata, copy=False)
-        print(np.unique(md['deme'], return_counts=True), [args.NAfr, args.NEur])
-        # assert np.all(st.data[-1][2][1] == [args.NAfr,args.NEur]), "final sizes aren't right"
+        assert np.all(np.unique(md['deme'], return_counts=True)[-1] ==
+                      [args.NAfr, args.NEur]), "final sizes aren't right"
 
         # add neutral mutations
         fwdpy11.infinite_sites(rng, pop, args.length * args.mutation_rate)
+        eprint("added mutations")
+        eprint(current_time())
 
+        eprint("getting data sfs")
         # get full frequency spectra
-        fs0, fs1, jSFS = per_deme_sfs(pop)
+        fs0, fs1, jSFS, fs0_sel, fs1_sel, jSFS_sel = per_deme_sfs(pop)
+        eprint(current_time())
 
         # project to desired sizes
         fs0_proj = fs0.project([2*args.nsam])
         fs1_proj = fs1.project([2*args.nsam])
+        fs0_sel_proj = fs0_sel.project([2*args.nsam])
+        fs1_sel_proj = fs1_sel.project([2*args.nsam])
+        eprint("projected spectra")
+        eprint(current_time())
 
         # moments spectrum
         theta = 4 * args.Nref * args.mutation_rate * args.length
@@ -341,9 +417,25 @@ if __name__ == "__main__":
         F0 = F.marginalize([1])
         F1 = F.marginalize([0])
 
-        spectra = {'fwdpy': {'Afr': fs0_proj, 'Eur': fs1_proj},
-                   'moments': {'Afr': F0, 'Eur': F1}}
+        if args.selection_coeff is None:
+            args.selection_coeff = 0.0
+        theta = 4 * args.Nref * args.sel_rate * args.length
+        F_sel = tennessen_moments(
+            args, gamma=2*args.Nref*args.selection_coeff, h=args.H/2) * theta
+        F0_sel = F_sel.marginalize([1])
+        F1_sel = F_sel.marginalize([0])
+        eprint("computed moments expectations")
+        eprint(current_time())
 
-        # fname = f'/lb/project/gravel/ragsdale_projects/PRS/simulations/spectra_tennessen_ns_{args.nsam}_length_{args.length}_seed_{seeds[rep]}.bp'
-        # with open(fname, 'wb+') as fout:
-        #     pickle.dump(spectra, fout)
+        spectra = {'neu': {'fwdpy': {'Afr': fs0_proj, 'Eur': fs1_proj},
+                           'moments': {'Afr': F0, 'Eur': F1}},
+                   'sel': {'fwdpy': {'Afr': fs0_sel_proj, 'Eur': fs1_sel_proj},
+                           'moments': {'Afr': F0_sel, 'Eur': F1_sel}}}
+
+        fname = f'spectra/spectra_tennessen_ns_{args.nsam}_length_{args.length}_s_{args.selection_coeff}_seed_{seeds[rep]}.bp'
+
+        with open(fname, 'wb+') as fout:
+            pickle.dump(spectra, fout)
+
+        eprint("wrote spectra file")
+        eprint(current_time())
