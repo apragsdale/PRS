@@ -17,9 +17,7 @@ import time
 import numpy as np
 import fwdpy11
 
-
-# import demography
-# import networkx as nx
+from tqdm import tqdm
 
 
 assert fwdpy11.__version__ >= '0.6.0', "Require fwdpy11 v. 0.6.0 or higher"
@@ -35,7 +33,7 @@ def current_time():
 
 
 def make_parser():
-    parser = argparse.ArgumentParser("IM.py",
+    parser = argparse.ArgumentParser("Tennessen_fwdpy.py",
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--seed', type=int,
                         help="Random number seed", required=True)
@@ -141,11 +139,13 @@ def setup_and_run_model(pop, ddemog, simlen, simplification_time=0,
 class SizeTracker(object):
     def __init__(self):
         self.data = []
+        self.pbar = tqdm(total=total_sim_length)
 
     def __call__(self, pop, sampler):
         md = np.array(pop.diploid_metadata, copy=False)
         self.data.append((pop.generation, pop.N,
                           np.unique(md['deme'], return_counts=True)))
+        self.pbar.update(1)
 
 
 def build_discrete_demography(args):
@@ -240,7 +240,10 @@ def per_deme_sfs(pop):
     col_sel = []
     data_sel = []
 
-    for tree in ti:
+    num_trees = len(np.unique(np.array(pop.tables.edges, copy=False)['left']))
+    eprint(current_time(),
+           f"Computing frequency spectrum over {num_trees} trees")
+    for tree in tqdm(ti, total=num_trees):
         for mut in tree.mutations():
             # nmuts_sites.append(pop.tables.sites[mut.site].position)
             sb = tree.samples_below(mut.node)
@@ -326,34 +329,6 @@ def tennessen_moments(args, gamma=None, h=1./2):
     return fs
 
 
-# def tennessen_demography(args):
-#     G = nx.DiGraph()
-#     # convert to genetic units
-#     T0 = (args.T_Af-args.T_B)/args.generation_time/2/args.Nref
-#     T1 = (args.T_B-args.T_Eu_As)/args.generation_time/2/args.Nref
-#     T2 = (args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref
-#     T3 = (args.T_accel)/args.generation_time/2/args.Nref
-#     MB = 2*args.Nref*args.mB
-#     MF = 2*args.Nref*args.mF
-#     nuA = args.NAfr0/args.Nref
-#     nuB = args.NB/args.Nref
-#     nuAfr = args.NAfr/args.Nref
-#     nuEur = args.NEur/args.Nref
-#     nuEur0 = args.NEur0/args.Nref
-#     nuEur1 = args.NEur1/args.Nref
-#     # add edges and nodes
-#     G.add_node('root', nu=1, T=0)
-#     G.add_node('A', nu=nuA, T=T0)
-#     G.add_node('B', nu=nuB, T=T1, m={'Afr0': MB})
-#     G.add_node('Afr0', nu=nuA, T=T1+T2, m={'B': MB, 'Eur1': MF})
-#     G.add_node('Eur1', nu0=nuEur0, nuF=nuEur1, T=T2, m={'Afr0': MF})
-#     G.add_node('Eur', nu0=nuEur1, nuF=nuEur, T=T3, m={'Afr': MF})
-#     G.add_node('Afr', nu0=nuA, nuF=nuAfr, T=T3, m={'Eur': MF})
-#     G.add_edges_from([('root','A'), ('A','B'), ('A','Afr0'), ('Afr0','Afr'), ('B','Eur1'), ('Eur1','Eur')])
-#     dg = demography.DemoGraph(G)
-#     fs = dg.SFS(pop_ids=['Afr','Eur'], sample_sizes=[2*args.nsam, 2*args.nsam])
-#     return fs
-
 if __name__ == "__main__":
     parser = make_parser()
     args = parser.parse_args(sys.argv[1:])
@@ -363,9 +338,8 @@ if __name__ == "__main__":
     seeds = np.random.randint(0, np.iinfo(np.uint32).max, args.nreps)
 
     for rep in range(args.nreps):
-        eprint(f"running rep {rep+1} of {args.nreps}")
+        eprint(current_time(), f"running rep {rep+1} of {args.nreps}")
         rng = fwdpy11.GSLrng(seeds[rep])
-        eprint(current_time())
         # Initialize demes:
         # Deme 0: Ancestral and Afr, Deme 1: Eur
         pop = fwdpy11.DiploidPopulation([args.Nref, 0], 1.0)
@@ -378,40 +352,41 @@ if __name__ == "__main__":
         L = args.length
         R = r*L
 
-        st = SizeTracker()
-        eprint(f"seed = {seeds[rep]}")
+        eprint(current_time(), f"seed = {seeds[rep]}")
         time1 = time.time()
-        eprint("simplification time and total time:",
-               freq_simplification_time, total_sim_length)
+        eprint(current_time(
+        ), f"total generations: {total_sim_length}, faster simplification gens: {freq_simplification_time}")
+
+        # run the simulation
+        eprint(current_time(), "running the simulation")
+        st = SizeTracker()
         setup_and_run_model(pop, ddemog, total_sim_length, simplification_time=freq_simplification_time,
-                            R=R, seed=seeds[rep])
+                            R=R, seed=seeds[rep], recorder=st)
+        st.pbar.close()
+
         time2 = time.time()
-        eprint(current_time())
-        # print(f"length of simulation: {L}")
-        eprint(f"time to run simulation: {time2-time1}")
+        eprint(current_time(), f"time to run simulation: {time2-time1}")
         md = np.array(pop.diploid_metadata, copy=False)
         assert np.all(np.unique(md['deme'], return_counts=True)[-1] ==
                       [args.NAfr, args.NEur]), "final sizes aren't right"
 
         # add neutral mutations
+        eprint(current_time(), "adding nuetral mutations")
         fwdpy11.infinite_sites(rng, pop, args.length * args.mutation_rate)
-        eprint("added mutations")
-        eprint(current_time())
 
-        eprint("getting data sfs")
         # get full frequency spectra
+        eprint(current_time(), "getting data sfs")
         fs0, fs1, jSFS, fs0_sel, fs1_sel, jSFS_sel = per_deme_sfs(pop)
-        eprint(current_time())
 
         # project to desired sizes
+        eprint(current_time(), "projecting spectra")
         fs0_proj = fs0.project([2*args.nsam])
         fs1_proj = fs1.project([2*args.nsam])
         fs0_sel_proj = fs0_sel.project([2*args.nsam])
         fs1_sel_proj = fs1_sel.project([2*args.nsam])
-        eprint("projected spectra")
-        eprint(current_time())
 
         # moments spectrum
+        eprint(current_time(), "computing moments expectations")
         theta = 4 * args.Nref * args.mutation_rate * args.length
         F = tennessen_moments(args) * theta
         F0 = F.marginalize([1])
@@ -424,18 +399,18 @@ if __name__ == "__main__":
             args, gamma=2*args.Nref*args.selection_coeff, h=args.H/2) * theta
         F0_sel = F_sel.marginalize([1])
         F1_sel = F_sel.marginalize([0])
-        eprint("computed moments expectations")
-        eprint(current_time())
 
         spectra = {'neu': {'fwdpy': {'Afr': fs0_proj, 'Eur': fs1_proj},
                            'moments': {'Afr': F0, 'Eur': F1}},
                    'sel': {'fwdpy': {'Afr': fs0_sel_proj, 'Eur': fs1_sel_proj},
                            'moments': {'Afr': F0_sel, 'Eur': F1_sel}}}
 
+        eprint(current_time(), "writing spectra file")
+        if os.path.isdir('spectra') is False:
+            os.system('mkdir spectra')
         fname = f'spectra/spectra_tennessen_ns_{args.nsam}_length_{args.length}_s_{args.selection_coeff}_seed_{seeds[rep]}.bp'
 
         with open(fname, 'wb+') as fout:
             pickle.dump(spectra, fout)
 
-        eprint("wrote spectra file")
-        eprint(current_time())
+        eprint(current_time(), "done!!")
