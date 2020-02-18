@@ -2,6 +2,11 @@
 This uses fwdpy11 >= 0.6.0
 """
 
+import os
+os.environ["MKL_NUM_THREADS"] = "1"  # NOQA
+os.environ["NUMEXPR_NUM_THREADS"] = "1"  # NOQA
+os.environ["OMP_NUM_THREADS"] = "1"  # NOQA
+
 from scipy.sparse import coo_matrix, csr_matrix
 from datetime import datetime
 import argparse
@@ -11,10 +16,6 @@ import sys
 import time
 import numpy as np
 import fwdpy11
-import os
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
-os.environ["OMP_NUM_THREADS"] = "1"
 
 
 # import demography
@@ -225,15 +226,19 @@ def per_deme_sfs(pop):
     deme_sfs = {}
     for i, j in zip(deme_sizes[0], deme_sizes[1]):
         deme_sfs[i] = np.zeros(2*j + 1)
+    deme_sfs_sel = {}
+    for i, j in zip(deme_sizes[0], deme_sizes[1]):
+        deme_sfs_sel[i] = np.zeros(2*j + 1)
 
     ti = fwdpy11.TreeIterator(pop.tables, samples, update_samples=True)
     nt = np.array(pop.tables.nodes, copy=False)
-    nmuts = 0
-    # nmuts_sites = []
 
-    row = []
-    col = []
-    data = []
+    row_neu = []
+    col_neu = []
+    data_neu = []
+    row_sel = []
+    col_sel = []
+    data_sel = []
 
     for tree in ti:
         for mut in tree.mutations():
@@ -241,29 +246,50 @@ def per_deme_sfs(pop):
             sb = tree.samples_below(mut.node)
             dc = np.unique(nt['deme'][sb], return_counts=True)
             assert dc[1].sum() == len(sb), f"{dc[1].sum} {len(sb)}"
-            nmuts += 1
-            for deme, daf in zip(dc[0], dc[1]):
-                deme_sfs[deme][daf] += 1
-            if 0 not in dc[0]:
-                deme_sfs[0][0] += 1
-            if 1 not in dc[0]:
-                deme_sfs[1][0] += 1
-            data.append(1)
-            if 0 in dc[0]:
-                row.append(dc[1][0])
-                if 1 in dc[0]:
-                    col.append(dc[1][1])
+            if mut.neutral:  # mutation is neutral
+                for deme, daf in zip(dc[0], dc[1]):
+                    deme_sfs[deme][daf] += 1
+                if 0 not in dc[0]:
+                    deme_sfs[0][0] += 1
+                if 1 not in dc[0]:
+                    deme_sfs[1][0] += 1
+                data_neu.append(1)
+                if 0 in dc[0]:
+                    row_neu.append(dc[1][0])
+                    if 1 in dc[0]:
+                        col_neu.append(dc[1][1])
+                    else:
+                        col_neu.append(0)
                 else:
-                    col.append(0)
-            else:
-                row.append(0)
-                col.append(dc[1][0])
+                    row_neu.append(0)
+                    col_neu.append(dc[1][0])
+            elif not mut.neutral:  # mutation is selected:
+                for deme, daf in zip(dc[0], dc[1]):
+                    deme_sfs_sel[deme][daf] += 1
+                if 0 not in dc[0]:
+                    deme_sfs_sel[0][0] += 1
+                if 1 not in dc[0]:
+                    deme_sfs_sel[1][0] += 1
+                data_sel.append(1)
+                if 0 in dc[0]:
+                    row_sel.append(dc[1][0])
+                    if 1 in dc[0]:
+                        col_sel.append(dc[1][1])
+                    else:
+                        col_sel.append(0)
+                else:
+                    row_sel.append(0)
+                    col_sel.append(dc[1][0])
 
-    jSFS_coo = coo_matrix((data, (row, col)),
-                          shape=(len(deme_sfs[0]), len(deme_sfs[1])))
-    jSFS = csr_matrix(jSFS_coo)
+    jSFS_coo_neu = coo_matrix((data_neu, (row_neu, col_neu)),
+                              shape=(len(deme_sfs[0]), len(deme_sfs[1])))
+    jSFS_neu = csr_matrix(jSFS_coo_neu)
+    jSFS_coo_sel = coo_matrix((data_sel, (row_sel, col_sel)),
+                              shape=(len(deme_sfs[0]), len(deme_sfs[1])))
+    jSFS_sel = csr_matrix(jSFS_coo_sel)
 
-    return moments.Spectrum(deme_sfs[0]), moments.Spectrum(deme_sfs[1]), jSFS
+    return (moments.Spectrum(deme_sfs[0]), moments.Spectrum(deme_sfs[1]), jSFS_neu,
+            moments.Spectrum(deme_sfs_sel[0]), moments.Spectrum(deme_sfs_sel[1]), jSFS_sel)
 
 
 def project_sfs(sfs, n):
@@ -272,24 +298,31 @@ def project_sfs(sfs, n):
     return psfs.data[1:-1]
 
 
-def tennessen_moments(args):
+def tennessen_moments(args, gamma=None, h=1./2):
     # ns = diploid size
     sample_sizes = (2*args.nsam, 2*args.nsam)
-    fs = moments.Demographics1D.snm([sum(sample_sizes)])
+    if gamma is None:
+        gamma = 0
+    fs = moments.LinearSystem_1D.steady_state_1D(
+        sum(sample_sizes), gamma=gamma, h=h)
+    fs = moments.Spectrum(fs)
     fs.integrate([args.NAfr0/args.Nref], (args.T_Af-args.T_B) /
-                 args.generation_time/2/args.Nref)
+                 args.generation_time/2/args.Nref, gamma=gamma, h=h)
     fs = moments.Manips.split_1D_to_2D(fs, sample_sizes[0], sample_sizes[1])
     fs.integrate([args.NAfr0/args.Nref, args.NB/args.Nref],
                  (args.T_B-args.T_Eu_As)/args.generation_time/2/args.Nref,
-                 m=[[0, 2*args.Nref*args.mB], [2*args.Nref*args.mB, 0]])
+                 m=[[0, 2*args.Nref*args.mB], [2*args.Nref*args.mB, 0]],
+                 gamma=[gamma, gamma], h=[h, h])
     def nu_func(t): return [args.NAfr0/args.Nref,
                             args.NEur0/args.Nref * np.exp(np.log(args.NEur1/args.NEur0) * t / ((args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref))]
     fs.integrate(nu_func, (args.T_Eu_As-args.T_accel)/args.generation_time/2/args.Nref,
-                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]])
+                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]],
+                 gamma=[gamma, gamma], h=[h, h])
     def nu_func(t): return [args.NAfr0/args.Nref * np.exp(np.log(args.NAfr/args.NAfr0) * t / (args.T_accel/args.generation_time/2/args.Nref)),
                             args.NEur1/args.Nref * np.exp(np.log(args.NEur/args.NEur1) * t / (args.T_accel/args.generation_time/2/args.Nref))]
     fs.integrate(nu_func, args.T_accel/args.generation_time/2/args.Nref,
-                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]])
+                 m=[[0, 2*args.Nref*args.mF], [2*args.Nref*args.mF, 0]],
+                 gamma=[gamma, gamma], h=[h, h])
     return fs
 
 
@@ -357,9 +390,8 @@ if __name__ == "__main__":
         # print(f"length of simulation: {L}")
         eprint(f"time to run simulation: {time2-time1}")
         md = np.array(pop.diploid_metadata, copy=False)
-        eprint(np.unique(md['deme'], return_counts=True),
-               [args.NAfr, args.NEur])
-        # assert np.all(st.data[-1][2][1] == [args.NAfr,args.NEur]), "final sizes aren't right"
+        assert np.all(np.unique(md['deme'], return_counts=True)[-1] ==
+                      [args.NAfr, args.NEur]), "final sizes aren't right"
 
         # add neutral mutations
         fwdpy11.infinite_sites(rng, pop, args.length * args.mutation_rate)
@@ -368,12 +400,14 @@ if __name__ == "__main__":
 
         eprint("getting data sfs")
         # get full frequency spectra
-        fs0, fs1, jSFS = per_deme_sfs(pop)
+        fs0, fs1, jSFS, fs0_sel, fs1_sel, jSFS_sel = per_deme_sfs(pop)
         eprint(current_time())
 
         # project to desired sizes
         fs0_proj = fs0.project([2*args.nsam])
         fs1_proj = fs1.project([2*args.nsam])
+        fs0_sel_proj = fs0_sel.project([2*args.nsam])
+        fs1_sel_proj = fs1_sel.project([2*args.nsam])
         eprint("projected spectra")
         eprint(current_time())
 
@@ -382,16 +416,23 @@ if __name__ == "__main__":
         F = tennessen_moments(args) * theta
         F0 = F.marginalize([1])
         F1 = F.marginalize([0])
+
+        if args.selection_coeff is None:
+            args.selection_coeff = 0.0
+        theta = 4 * args.Nref * args.sel_rate * args.length
+        F_sel = tennessen_moments(
+            args, gamma=2*args.Nref*args.selection_coeff, h=args.H/2) * theta
+        F0_sel = F_sel.marginalize([1])
+        F1_sel = F_sel.marginalize([0])
         eprint("computed moments expectations")
         eprint(current_time())
 
-        spectra = {'fwdpy': {'Afr': fs0_proj, 'Eur': fs1_proj},
-                   'moments': {'Afr': F0, 'Eur': F1}}
+        spectra = {'neu': {'fwdpy': {'Afr': fs0_proj, 'Eur': fs1_proj},
+                           'moments': {'Afr': F0, 'Eur': F1}},
+                   'sel': {'fwdpy': {'Afr': fs0_sel_proj, 'Eur': fs1_sel_proj},
+                           'moments': {'Afr': F0_sel, 'Eur': F1_sel}}}
 
-        if args.selection_coeff is None:
-            fname = f'spectra/spectra_tennessen_ns_{args.nsam}_length_{args.length}_s_0_seed_{seeds[rep]}.bp'
-        else:
-            fname = f'spectra/spectra_tennessen_ns_{args.nsam}_length_{args.length}_s_{args.selection_coeff}_seed_{seeds[rep]}.bp'
+        fname = f'spectra/spectra_tennessen_ns_{args.nsam}_length_{args.length}_s_{args.selection_coeff}_seed_{seeds[rep]}.bp'
 
         with open(fname, 'wb+') as fout:
             pickle.dump(spectra, fout)
